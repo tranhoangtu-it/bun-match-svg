@@ -17,8 +17,10 @@ const tempDir = path.join(__dirname, "cli-test-temp")
 const originalCwd = process.cwd()
 
 describe("cli init", () => {
+  let bunInitSpy: Mock<typeof cli.runBunInit>
   let installSpy: Mock<typeof cli.installDependency>
   let consoleSpy: Mock<typeof console.log>
+  let callOrder: string[]
 
   beforeAll(async () => {
     await fs.mkdir(tempDir, { recursive: true })
@@ -30,7 +32,15 @@ describe("cli init", () => {
 
   beforeEach(async () => {
     process.chdir(tempDir)
-    installSpy = spyOn(cli, "installDependency").mockImplementation(async () => {})
+    callOrder = []
+    bunInitSpy = spyOn(cli, "runBunInit").mockImplementation(async () => {
+      callOrder.push("bunInit")
+    })
+    installSpy = spyOn(cli, "installDependency").mockImplementation(
+      async () => {
+        callOrder.push("installDependency")
+      },
+    )
     consoleSpy = spyOn(console, "log").mockImplementation(() => {})
   })
 
@@ -40,6 +50,7 @@ describe("cli init", () => {
     for (const file of files) {
       await fs.rm(path.join(tempDir, file), { recursive: true, force: true })
     }
+    bunInitSpy.mockRestore()
     installSpy.mockRestore()
     consoleSpy.mockRestore()
   })
@@ -47,7 +58,9 @@ describe("cli init", () => {
   test("should create files and config on a fresh project", async () => {
     await cli.init()
 
+    expect(bunInitSpy).toHaveBeenCalledTimes(1)
     expect(installSpy).toHaveBeenCalledTimes(1)
+    expect(callOrder).toEqual(["bunInit", "installDependency"])
 
     // Check files
     const testFileExists = await cli.fileExists("tests/svg.test.ts")
@@ -64,9 +77,41 @@ describe("cli init", () => {
 
     // Check console logs
     const logs = consoleSpy.mock.calls.flat().join("\n")
+    expect(logs).toContain("📦 Initializing Bun project...")
     expect(logs).toContain("✅ Created example test in tests/svg.test.ts")
     expect(logs).toContain("✅ Created preload file in tests/fixtures/preload.ts")
     expect(logs).toContain("✅ Created bunfig.toml")
+  })
+
+  test("should skip bun init when package.json already exists", async () => {
+    const existingPkg = JSON.stringify({ name: "my-existing-project" }, null, 2)
+    await fs.writeFile("package.json", existingPkg)
+
+    await cli.init()
+
+    expect(bunInitSpy).not.toHaveBeenCalled()
+    expect(installSpy).toHaveBeenCalledTimes(1)
+    expect(await fs.readFile("package.json", "utf-8")).toBe(existingPkg)
+
+    const logs = consoleSpy.mock.calls.flat().join("\n")
+    expect(logs).toContain("🔒 package.json already exists, skipping bun init.")
+  })
+
+  test("should exit with code 1 and not install dependencies when bun init fails", async () => {
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {})
+    const exitSpy = spyOn(process, "exit").mockImplementation((() => {
+      throw new Error("process.exit")
+    }) as never)
+    bunInitSpy.mockRejectedValueOnce(new Error("bun init failed with code 1"))
+
+    try {
+      await expect(cli.init()).rejects.toThrow("process.exit")
+      expect(exitSpy).toHaveBeenCalledWith(1)
+      expect(installSpy).not.toHaveBeenCalled()
+    } finally {
+      exitSpy.mockRestore()
+      errorSpy.mockRestore()
+    }
   })
 
   test("should skip creating files that already exist", async () => {

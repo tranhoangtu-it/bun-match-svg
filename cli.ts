@@ -21,12 +21,30 @@ const PRELOAD_FILE = `import "bun-match-svg"`
 const BUNFIG = `[test]
 preload = ["./tests/fixtures/preload.ts"]`
 
+export async function runBunInit() {
+  return new Promise((resolve, reject) => {
+    const bunInit = spawn("bun", ["init", "-y"], {
+      stdio: "inherit",
+    })
+
+    bunInit.on("error", reject)
+    bunInit.on("close", (code) => {
+      if (code === 0) {
+        resolve(undefined)
+      } else {
+        reject(new Error(`bun init failed with code ${code}`))
+      }
+    })
+  })
+}
+
 export async function installDependency() {
   return new Promise((resolve, reject) => {
     const install = spawn('bun', ['add', '-d', 'bun-match-svg'], {
       stdio: 'inherit'
     })
 
+    install.on('error', reject)
     install.on('close', (code) => {
       if (code === 0) {
         resolve(undefined)
@@ -48,6 +66,13 @@ export async function fileExists(path: string): Promise<boolean> {
 
 export async function init() {
   try {
+    if (!(await fileExists("package.json"))) {
+      console.log("📦 Initializing Bun project...")
+      await runBunInit()
+    } else {
+      console.log("🔒 package.json already exists, skipping bun init.")
+    }
+
     console.log("📦 Installing bun-match-svg...")
     await installDependency()
     
